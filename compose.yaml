@@ -1,0 +1,58 @@
+# Native launch.sh is the recommended deployment.
+# This optional Compose deployment requires Linux host networking, preserving
+# localhost-only administration and private loopback gateway management.
+# Host networking publishes listeners directly: app PRINTWATCH_PORT (default8080)
+# and WebRTC8555 TCP/UDP. Ports1984 and8554 are never LAN listeners.
+services:
+  gateway:
+    # Official image/tag and immutable multi-architecture index verified with
+    # https://hub.docker.com/v2/repositories/alexxit/go2rtc/tags/1.9.15
+    image: alexxit/go2rtc:1.9.15@sha256:e098de5c2f8040dc3d4784ed2d5cfdac3b0979f9349afe587ef6a670a14b9f4d
+    restart: unless-stopped
+    network_mode: host
+    command: ["-config", "/config/go2rtc.yaml"]
+    configs:
+      - source: gateway_config
+        target: /config/go2rtc.yaml
+    security_opt:
+      - no-new-privileges:true
+  app:
+    build: .
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - gateway
+    environment:
+      PRINTWATCH_DATA_DIR: /data
+      PRINTWATCH_GATEWAY_URL: http://127.0.0.1:1984
+      PRINTWATCH_LAN_HOST: "${PRINTWATCH_LAN_HOST:-}"
+    command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "${PRINTWATCH_PORT:-8080}", "--no-proxy-headers", "--no-access-log"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${PRINTWATCH_PORT:-8080}/api/health',timeout=2)"]
+    volumes:
+      - printwatch_data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+volumes:
+  printwatch_data:
+configs:
+  gateway_config:
+    # Compose 2.23.1+ supports inline config content.
+    # Set PRINTWATCH_LAN_HOST to this computer's LAN IP before `docker compose up`.
+    content: |
+      api:
+        listen: "127.0.0.1:1984"
+      rtsp:
+        listen: ""
+      webrtc:
+        listen: ":8555"
+        ice_servers: []
+        candidates:
+          - "${PRINTWATCH_LAN_HOST:?Set PRINTWATCH_LAN_HOST to the Docker host LAN IP}:8555"
+      streams: {}
+      log:
+        level: warn
